@@ -18,7 +18,7 @@ static bool is_scroll(const struct input_event *event) {
 }
 
 struct threshold_data {
-    uint32_t accumulated; /* total |dx|+|dy| since last idle reset */
+    uint32_t accumulated; /* decaying sum of |dx|+|dy| */
     bool blocked;         /* true = blocking events until threshold is met */
     bool skip_frame;      /* true = threshold crossed mid-frame, drop rest of frame */
     int64_t last_event_ms;
@@ -31,17 +31,28 @@ static int threshold_handle_event(const struct device *dev,
                                   struct zmk_input_processor_state *state) {
     struct threshold_data *data = dev->data;
     uint32_t threshold = param1;
-    uint32_t idle_ms   = param2;
+    uint32_t window_ms = param2;
 
     int64_t now = k_uptime_get();
 
-    /* Reset accumulator after idle — next movement starts blocked again */
-    if (now - data->last_event_ms > (int64_t)idle_ms) {
-        data->accumulated = 0;
-        data->blocked = true;
-        data->skip_frame = false;
+    /* Decay accumulated counts at rate threshold/window_ms.
+     * Movement must sustain that rate to cross the threshold; once silent,
+     * the accumulator drains and the device re-blocks. */
+    int64_t dt = now - data->last_event_ms;
+    if (dt > 0 && window_ms > 0) {
+        int64_t decay = (dt * (int64_t)threshold) / (int64_t)window_ms;
+        data->accumulated = decay >= (int64_t)data->accumulated
+                                ? 0
+                                : data->accumulated - (uint32_t)decay;
     }
     data->last_event_ms = now;
+
+    /* Drained back to zero while unblocked — re-arm the block. */
+    if (data->accumulated == 0 && !data->blocked) {
+        data->blocked = true;
+        data->skip_frame = false;
+        LOG_DBG("re-blocked (accumulator drained)");
+    }
 
     /* Sync marks end-of-frame. Drop it while blocked or when threshold was crossed
      * mid-frame (skip_frame), so no partial frame leaks to downstream processors. */
@@ -60,18 +71,28 @@ static int threshold_handle_event(const struct device *dev,
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
+    /* --- X/Y movement event handling below --- */
+
+    /* Accumulate on every movement event — including while unblocked — so the
+     * decay doesn't drain mid-gesture and re-block the user. Cap prevents
+     * confident movement from banking unbounded credit toward re-block. */
+    int32_t v = event->value;
+    data->accumulated += (uint32_t)(v < 0 ? -v : v);
+    uint32_t cap = threshold * 2;
+    if (data->accumulated > cap) {
+        data->accumulated = cap;
+    }
+
     if (!data->blocked && !data->skip_frame) {
         return ZMK_INPUT_PROC_CONTINUE;
     }
-
-    int32_t v = event->value;
-    data->accumulated += (uint32_t)(v < 0 ? -v : v);
 
     if (data->accumulated >= threshold) {
         /* Threshold met — allow events through, but skip the rest of this frame so
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
+        LOG_DBG("unblocked (accumulated=%u >= threshold=%u)", data->accumulated, threshold);
     }
 
     /* Block further processing until threshold is met */
@@ -85,7 +106,7 @@ static const struct zmk_input_processor_driver_api threshold_api = {
 #define THRESHOLD_INST(n)                                                   \
     static struct threshold_data data_##n = {                               \
         .accumulated = 0,                                                   \
-        .blocked = true,                                                      \
+        .blocked = true,                                                    \
         .skip_frame = false,                                                \
         .last_event_ms = 0,                                                 \
     };                                                                      \

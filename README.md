@@ -1,6 +1,8 @@
 # zmk-input-processor-threshold
 
-A [ZMK](https://zmk.dev) input processor that blocks pointing device output until enough movement has accumulated to confirm intentional input. Accidental contact — a finger resting on or brushing the device — is silently discarded. Once the accumulated movement crosses the threshold, normal output resumes until the device goes idle.
+A [ZMK](https://zmk.dev) input processor that blocks pointing device output until enough movement has accumulated *within a recent time window* to confirm intentional input. Accidental contact — a finger resting on or brushing the device, or steady low-rate jitter — is silently discarded. Counts decay over the window, so movement must be sustained at a real rate to break through; once silent, the device re-blocks automatically.
+
+> **v1.1 — breaking:** `param2` changed from `idle_ms` (reset accumulator after a full silence gap) to `window_ms` (accumulator decays continuously). Sustained low-rate jitter no longer leaks through, and re-block happens as the accumulator drains rather than via a separate idle timer. Same syntax, different behavior — review your value. Pin to `revision: v1.0` for the old semantics. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting Started
 
@@ -91,9 +93,12 @@ The values below are calculated and may not reflect real-world sensor behavior. 
 </tbody>
 </table>
 
-**`param2` — idle-ms**
+**`param2` — window-ms**
 
-How long (in milliseconds) the device must be still before the block resets. If the block resets while you are still moving, increase it. If accidental touches are not blocked after lifting your hand, decrease it.
+The time window (in milliseconds) over which counts accumulate. Accumulated counts decay at a rate of `threshold / window_ms` per millisecond, so movement must sustain that rate to cross the threshold. When movement stops, the accumulator drains and the device re-blocks within `window_ms` to `2 × window_ms`, depending on how much was banked during the gesture (the accumulator is capped at `2 × threshold`).
+
+- Increase if real movement gets cut off, or if the block re-arms too quickly during normal use.
+- Decrease if accidental touches or low-rate jitter slip through, or if the device takes too long to re-block after you lift your hand.
 
 ## Chaining with other processors
 
