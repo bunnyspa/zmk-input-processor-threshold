@@ -45,6 +45,16 @@ static int threshold_handle_event(const struct device *dev,
                                 ? 0
                                 : data->accumulated - (uint32_t)decay;
     }
+
+    /* Log the first event after a long gap — likely a wake-up burst from the sensor. */
+    bool is_wake_event = (data->last_event_ms == 0 || dt > 500);
+    if (is_wake_event && !event->sync &&
+        event->type == INPUT_EV_REL &&
+        (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
+        LOG_WRN("wake burst: dt=%lldms code=%u val=%d acc_before=%u blocked=%d",
+                dt, event->code, event->value, data->accumulated, data->blocked);
+    }
+
     data->last_event_ms = now;
 
     /* Drained back to zero while unblocked — re-arm the block. */
@@ -92,7 +102,8 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_DBG("unblocked (accumulated=%u >= threshold=%u)", data->accumulated, threshold);
+        LOG_WRN("unblocked: accumulated=%u >= threshold=%u dt_since_last=%lldms val=%d code=%u",
+                data->accumulated, threshold, dt, event->value, event->code);
     }
 
     /* Block further processing until threshold is met */
