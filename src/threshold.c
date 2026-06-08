@@ -5,6 +5,8 @@
 #include <zephyr/input/input.h>
 #include <drivers/input_processor.h>
 #include <zephyr/logging/log.h>
+#include <zmk/events/activity_state_changed.h>
+#include <zmk/activity.h>
 
 LOG_MODULE_REGISTER(threshold, CONFIG_ZMK_LOG_LEVEL);
 
@@ -17,11 +19,18 @@ static bool is_scroll(const struct input_event *event) {
            (event->code == INPUT_REL_WHEEL || event->code == INPUT_REL_HWHEEL);
 }
 
+struct threshold_config {
+    uint32_t threshold;
+    uint32_t window_ms;
+    uint32_t wake_discard_ms;
+};
+
 struct threshold_data {
     uint32_t accumulated; /* decaying sum of |dx|+|dy| */
     bool blocked;         /* true = blocking events until threshold is met */
     bool skip_frame;      /* true = threshold crossed mid-frame, drop rest of frame */
     int64_t last_event_ms;
+    int64_t wake_recovery_until_ms;
 };
 
 static int threshold_handle_event(const struct device *dev,
@@ -30,8 +39,11 @@ static int threshold_handle_event(const struct device *dev,
                                   uint32_t param2,
                                   struct zmk_input_processor_state *state) {
     struct threshold_data *data = dev->data;
-    uint32_t threshold = param1;
-    uint32_t window_ms = param2;
+    const struct threshold_config *cfg = dev->config;
+
+    /* param1/param2 override named properties when non-zero */
+    uint32_t threshold = param1 ? param1 : cfg->threshold;
+    uint32_t window_ms = param2 ? param2 : cfg->window_ms;
 
     int64_t now = k_uptime_get();
 
@@ -46,16 +58,33 @@ static int threshold_handle_event(const struct device *dev,
                                 : data->accumulated - (uint32_t)decay;
     }
 
-    /* Log the first event after a long gap — likely a wake-up burst from the sensor. */
-    bool is_wake_event = (data->last_event_ms == 0 || dt > 500);
-    if (is_wake_event && !event->sync &&
-        event->type == INPUT_EV_REL &&
-        (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
-        LOG_WRN("wake burst: dt=%lldms code=%u val=%d acc_before=%u blocked=%d",
-                dt, event->code, event->value, data->accumulated, data->blocked);
-    }
+    /* TODO: arm wake recovery from dt (sensor silent ≥ idle timeout) as a
+     * fallback for when the burst arrives before ZMK_ACTIVITY_ACTIVE fires.
+     * Threshold should use CONFIG_ZMK_IDLE_TIMEOUT rather than a hardcoded value.
+    if (cfg->wake_discard_ms > 0 && data->last_event_ms > 0 && dt >= CONFIG_ZMK_IDLE_TIMEOUT) {
+        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_discard_ms;
+        data->accumulated = 0;
+        data->blocked = true;
+        data->skip_frame = false;
+        LOG_DBG("wake recovery armed by dt: %lldms", dt);
+    } */
 
     data->last_event_ms = now;
+
+    /* Discard X/Y events during wake recovery window to suppress sensor
+     * recalibration noise that would otherwise falsely activate a temp layer. */
+    if (data->wake_recovery_until_ms > 0 && now < data->wake_recovery_until_ms) {
+        if (!event->sync &&
+            event->type == INPUT_EV_REL &&
+            (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
+            data->accumulated = 0;
+            data->blocked = true;
+            data->skip_frame = false;
+            LOG_DBG("wake recovery: discarding val=%d remaining=%lldms",
+                    event->value, data->wake_recovery_until_ms - now);
+            return ZMK_INPUT_PROC_STOP;
+        }
+    }
 
     /* Drained back to zero while unblocked — re-arm the block. */
     if (data->accumulated == 0 && !data->blocked) {
@@ -102,8 +131,7 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_WRN("unblocked: accumulated=%u >= threshold=%u dt_since_last=%lldms val=%d code=%u",
-                data->accumulated, threshold, dt, event->value, event->code);
+        LOG_DBG("unblocked (accumulated=%u >= threshold=%u)", data->accumulated, threshold);
     }
 
     /* Block further processing until threshold is met */
@@ -114,15 +142,50 @@ static const struct zmk_input_processor_driver_api threshold_api = {
     .handle_event = threshold_handle_event,
 };
 
-#define THRESHOLD_INST(n)                                                   \
-    static struct threshold_data data_##n = {                               \
-        .accumulated = 0,                                                   \
-        .blocked = true,                                                    \
-        .skip_frame = false,                                                \
-        .last_event_ms = 0,                                                 \
-    };                                                                      \
-    DEVICE_DT_INST_DEFINE(n, NULL, NULL, &data_##n, NULL,                   \
-                          POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, \
+#define THRESHOLD_INST(n)                                                    \
+    static const struct threshold_config config_##n = {                      \
+        .threshold       = DT_INST_PROP(n, threshold),                       \
+        .window_ms       = DT_INST_PROP(n, window_ms),                       \
+        .wake_discard_ms = DT_INST_PROP(n, wake_discard_ms),                 \
+    };                                                                       \
+    static struct threshold_data data_##n = {                                \
+        .accumulated = 0,                                                    \
+        .blocked = true,                                                     \
+        .skip_frame = false,                                                 \
+        .last_event_ms = 0,                                                  \
+        .wake_recovery_until_ms = 0,                                         \
+    };                                                                       \
+    DEVICE_DT_INST_DEFINE(n, NULL, NULL, &data_##n, &config_##n,             \
+                          POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,  \
                           &threshold_api);
 
 DT_INST_FOREACH_STATUS_OKAY(THRESHOLD_INST)
+
+#define GET_THRESHOLD_DEV(n) DEVICE_DT_INST_GET(n),
+static const struct device *threshold_devs[] = {
+    DT_INST_FOREACH_STATUS_OKAY(GET_THRESHOLD_DEV)
+};
+
+static int on_activity_state(const zmk_event_t *eh) {
+    struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
+    if (!ev || ev->state != ZMK_ACTIVITY_ACTIVE) {
+        return 0;
+    }
+    int64_t now = k_uptime_get();
+    for (size_t i = 0; i < ARRAY_SIZE(threshold_devs); i++) {
+        const struct threshold_config *cfg = threshold_devs[i]->config;
+        if (!cfg->wake_discard_ms) {
+            continue;
+        }
+        struct threshold_data *data = threshold_devs[i]->data;
+        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_discard_ms;
+        data->accumulated = 0;
+        data->blocked = true;
+        data->skip_frame = false;
+        LOG_DBG("wake recovery armed: %ums", cfg->wake_discard_ms);
+    }
+    return 0;
+}
+
+ZMK_LISTENER(threshold_activity_listener, on_activity_state);
+ZMK_SUBSCRIPTION(threshold_activity_listener, zmk_activity_state_changed);

@@ -3,14 +3,49 @@ description: |
   until the total magnitude crosses a threshold. Resets after a configurable
   idle period with no input.
 
-  Example:
+  Typical usage — pass threshold and window as positional params:
     &threshold 100 1000
 
-  param1: threshold — minimum total movement (sum of |dx| + |dy|) in raw
-          sensor counts required before events are passed through.
-  param2: idle-ms — milliseconds of no input after which the accumulator
-          resets and the next movement starts blocked again.
+  wake-discard-ms is always set as a node property (no positional equivalent):
+    &threshold {
+        wake-discard-ms = <100>;
+    };
+
+  threshold and window-ms can also be set as node properties and used as
+  fallbacks when param1/param2 are 0. This is an alternative to positional
+  params, not a supplement.
+
+  param1: threshold   — minimum |dx|+|dy| counts to pass through. Overrides
+                        the threshold property when non-zero.
+  param2: window-ms   — decay window in ms. Overrides window-ms when non-zero.
 
 compatible: "zmk,input-processor-threshold"
 
-include: ip_two_param.yaml
+include: base.yaml
+
+properties:
+  "#input-processor-cells":
+    type: int
+    const: 2
+
+  threshold:
+    type: int
+    default: 0
+    description: >
+      Fallback minimum accumulated |dx|+|dy| sensor counts before events
+      pass through. Used when param1 is 0.
+
+  window-ms:
+    type: int
+    default: 0
+    description: >
+      Fallback decay window in milliseconds. The accumulator drains at
+      threshold/window-ms counts per ms. Used when param2 is 0.
+
+  wake-discard-ms:
+    type: int
+    default: 0
+    description: >
+      Milliseconds after ZMK_ACTIVITY_ACTIVE during which all X/Y events
+      are discarded. 0 = disabled. Use to suppress sensor wake-noise that
+      would otherwise falsely activate a temporary layer (e.g. zip_temp_layer).

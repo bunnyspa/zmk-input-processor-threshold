@@ -2,6 +2,8 @@
 
 A [ZMK](https://zmk.dev) input processor that blocks pointing device output until enough movement has accumulated *within a recent time window* to confirm intentional input. Accidental contact — a finger resting on or brushing the device, or steady low-rate jitter — is silently discarded. Counts decay over the window, so movement must be sustained at a real rate to break through; once silent, the device re-blocks automatically.
 
+> **v1.2:** Added `wake-discard-ms` node property — suppresses motion input for a configurable window after the keyboard wakes from idle. Fixes false activation caused by sensor noise on wake. `threshold` and `window-ms` are now also available as named node properties (fallback when param1/param2 are 0). Fully backward-compatible — `&threshold 100 1000` still works unchanged. See [CHANGELOG.md](CHANGELOG.md).
+
 > **v1.1 — breaking:** `param2` changed from `idle_ms` (reset accumulator after a full silence gap) to `window_ms` (accumulator decays continuously). Sustained low-rate jitter no longer leaks through, and re-block happens as the accumulator drains rather than via a separate idle timer. Same syntax, different behavior — review your value. Pin to `revision: v1.0` for the old semantics. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting Started
@@ -56,7 +58,7 @@ CONFIG_ZMK_INPUT_PROCESSOR_THRESHOLD_BLOCK_SCROLL=y
     pointing_device_listener {
         compatible = "zmk,input-listener";
         device = <&pointing_device>;
-        input-processors = <&threshold 100 2000>;
+        input-processors = <&threshold 100 1000>;
     };
 };
 ```
@@ -67,7 +69,7 @@ If `pointing_device_listener` is already defined by your board or shield (e.g. i
 #include <input/processors/threshold.dtsi>
 
 &pointing_device_listener {
-    input-processors = <&threshold 100 2000>;
+    input-processors = <&threshold 100 1000>;
 };
 ```
 
@@ -95,10 +97,24 @@ The values below are calculated and may not reflect real-world sensor behavior. 
 
 **`param2` — window-ms**
 
-The time window (in milliseconds) over which counts accumulate. Accumulated counts decay at a rate of `threshold / window_ms` per millisecond, so movement must sustain that rate to cross the threshold. When movement stops, the accumulator drains and the device re-blocks within `window_ms` to `2 × window_ms`, depending on how much was banked during the gesture (the accumulator is capped at `2 × threshold`).
+The time window (in milliseconds) over which counts accumulate. Accumulated counts decay at a rate of `threshold / window_ms` per millisecond, so movement must sustain that rate to cross the threshold. When movement stops, the count drains and the device re-blocks within `window_ms` to `2 × window_ms`, depending on how much was built up during the gesture (capped at `2 × threshold`).
 
 - Increase if real movement gets cut off, or if the block re-arms too quickly during normal use.
 - Decrease if accidental touches or low-rate jitter slip through, or if the device takes too long to re-block after you lift your hand.
+
+## Node properties
+
+`wake-discard-ms` suppresses motion input for a short window on keyboard wake. Some sensors may produce spurious motion during the transition back to active mode. `0` (the default) disables the feature.
+
+`threshold` and `window-ms` are fallbacks used when param1/param2 are 0.
+
+```c
+&threshold {
+    wake-discard-ms = <100>; // increase if unwanted motion persists on wake
+    threshold = <100>;       // optional: fallback for param1 when 0
+    window-ms = <1000>;      // optional: fallback for param2 when 0
+};
+```
 
 ## Chaining with other processors
 
@@ -109,7 +125,7 @@ If you need a processor to activate on any touch regardless of the threshold blo
 ```c
 input-processors = <
     // processors here see all events, including accidental contact
-    &threshold 100 2000
+    &threshold 100 1000
     // processors here only see intentional movement
 >;
 ```
@@ -118,11 +134,12 @@ A common setup with `zip_temp_layer`, where layer 2 is a mouse click layer that 
 
 ```c
 input-processors = <
-    &threshold 100 2000
+    &threshold 100 1000
     &zip_temp_layer 2 2000
     &zip_xy_scaler 1 2
 >;
 ```
+
 
 ## Notes
 
