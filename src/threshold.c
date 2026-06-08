@@ -58,21 +58,10 @@ static int threshold_handle_event(const struct device *dev,
                                 : data->accumulated - (uint32_t)decay;
     }
 
-    /* TODO: arm wake recovery from dt (sensor silent ≥ idle timeout) as a
-     * fallback for when the burst arrives before ZMK_ACTIVITY_ACTIVE fires.
-     * Threshold should use CONFIG_ZMK_IDLE_TIMEOUT rather than a hardcoded value.
-    if (cfg->wake_suppress_ms > 0 && data->last_event_ms > 0 && dt >= CONFIG_ZMK_IDLE_TIMEOUT) {
-        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_suppress_ms;
-        data->accumulated = 0;
-        data->blocked = true;
-        data->skip_frame = false;
-        LOG_DBG("wake recovery armed by dt: %lldms", dt);
-    } */
-
     data->last_event_ms = now;
 
-    /* Discard X/Y events during wake recovery window to suppress sensor
-     * recalibration noise that would otherwise falsely activate a temp layer. */
+    /* Suppress motion input during the wake window to prevent spurious
+     * sensor output on wake from passing through to downstream processors. */
     if (data->wake_recovery_until_ms > 0 && now < data->wake_recovery_until_ms) {
         if (!event->sync &&
             event->type == INPUT_EV_REL &&
@@ -80,7 +69,7 @@ static int threshold_handle_event(const struct device *dev,
             data->accumulated = 0;
             data->blocked = true;
             data->skip_frame = false;
-            LOG_WRN("wake suppress: val=%d remaining=%lldms",
+            LOG_DBG("wake suppress: val=%d remaining=%lldms",
                     event->value, data->wake_recovery_until_ms - now);
             return ZMK_INPUT_PROC_STOP;
         }
@@ -131,7 +120,7 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_WRN("unblocked: accumulated=%u >= threshold=%u dt=%lldms val=%d",
+        LOG_DBG("unblocked: accumulated=%u >= threshold=%u dt=%lldms val=%d",
                 data->accumulated, threshold, dt, event->value);
     }
 
@@ -183,7 +172,7 @@ static int on_activity_state(const zmk_event_t *eh) {
         data->accumulated = 0;
         data->blocked = true;
         data->skip_frame = false;
-        LOG_DBG("wake recovery armed: %ums", cfg->wake_suppress_ms);
+        LOG_DBG("wake suppress armed: %ums", cfg->wake_suppress_ms);
     }
     return 0;
 }
