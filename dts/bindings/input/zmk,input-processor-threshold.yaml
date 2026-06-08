@@ -21,13 +21,9 @@ description: |
 
 compatible: "zmk,input-processor-threshold"
 
-include: base.yaml
+include: ip_two_param.yaml
 
 properties:
-  "#input-processor-cells":
-    type: int
-    const: 2
-
   threshold:
     type: int
     default: 0
