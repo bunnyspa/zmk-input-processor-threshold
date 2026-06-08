@@ -2,7 +2,7 @@
 
 A [ZMK](https://zmk.dev) input processor that blocks pointing device output until enough movement has accumulated *within a recent time window* to confirm intentional input. Accidental contact — a finger resting on or brushing the device, or steady low-rate jitter — is silently discarded. Counts decay over the window, so movement must be sustained at a real rate to break through; once silent, the device re-blocks automatically.
 
-> **v1.2:** Added `wake-discard-ms` node property — suppresses motion input for a configurable window after the keyboard wakes from idle. Fixes false activation caused by sensor noise on wake. `threshold` and `window-ms` are now also available as named node properties (fallback when param1/param2 are 0). Fully backward-compatible — `&threshold 100 1000` still works unchanged. See [CHANGELOG.md](CHANGELOG.md).
+> **v1.2:** Added `wake-suppress-ms` node property — suppresses motion input for a configurable window after the keyboard wakes from idle. Fixes false activation caused by sensor noise on wake. `threshold` and `window-ms` are now also available as named node properties (fallback when param1/param2 are 0). Fully backward-compatible — `&threshold 100 1000` still works unchanged. See [CHANGELOG.md](CHANGELOG.md).
 
 > **v1.1 — breaking:** `param2` changed from `idle_ms` (reset accumulator after a full silence gap) to `window_ms` (accumulator decays continuously). Sustained low-rate jitter no longer leaks through, and re-block happens as the accumulator drains rather than via a separate idle timer. Same syntax, different behavior — review your value. Pin to `revision: v1.0` for the old semantics. See [CHANGELOG.md](CHANGELOG.md).
 
@@ -104,13 +104,13 @@ The time window (in milliseconds) over which counts accumulate. Accumulated coun
 
 ## Node properties
 
-`wake-discard-ms` suppresses motion input for a short window on keyboard wake. Some sensors may produce spurious motion during the transition back to active mode. `0` (the default) disables the feature.
+`wake-suppress-ms` suppresses motion input for a short window on keyboard wake. Some sensors may produce spurious motion during the transition back to active mode. `0` (the default) disables the feature.
 
 `threshold` and `window-ms` are fallbacks used when param1/param2 are 0.
 
 ```c
 &threshold {
-    wake-discard-ms = <100>; // increase if unwanted motion persists on wake
+    wake-suppress-ms = <100>; // increase if unwanted motion persists on wake
     threshold = <100>;       // optional: fallback for param1 when 0
     window-ms = <1000>;      // optional: fallback for param2 when 0
 };

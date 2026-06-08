@@ -6,9 +6,9 @@ description: |
   Typical usage — pass threshold and window as positional params:
     &threshold 100 1000
 
-  wake-discard-ms is always set as a node property (no positional equivalent):
+  wake-suppress-ms is always set as a node property (no positional equivalent):
     &threshold {
-        wake-discard-ms = <100>;
+        wake-suppress-ms = <100>;
     };
 
   threshold and window-ms can also be set as node properties and used as
@@ -42,7 +42,7 @@ properties:
       Fallback decay window in milliseconds. The accumulator drains at
       threshold/window-ms counts per ms. Used when param2 is 0.
 
-  wake-discard-ms:
+  wake-suppress-ms:
     type: int
     default: 0
     description: >

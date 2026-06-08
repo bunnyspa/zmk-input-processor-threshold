@@ -22,7 +22,7 @@ static bool is_scroll(const struct input_event *event) {
 struct threshold_config {
     uint32_t threshold;
     uint32_t window_ms;
-    uint32_t wake_discard_ms;
+    uint32_t wake_suppress_ms;
 };
 
 struct threshold_data {
@@ -61,8 +61,8 @@ static int threshold_handle_event(const struct device *dev,
     /* TODO: arm wake recovery from dt (sensor silent ≥ idle timeout) as a
      * fallback for when the burst arrives before ZMK_ACTIVITY_ACTIVE fires.
      * Threshold should use CONFIG_ZMK_IDLE_TIMEOUT rather than a hardcoded value.
-    if (cfg->wake_discard_ms > 0 && data->last_event_ms > 0 && dt >= CONFIG_ZMK_IDLE_TIMEOUT) {
-        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_discard_ms;
+    if (cfg->wake_suppress_ms > 0 && data->last_event_ms > 0 && dt >= CONFIG_ZMK_IDLE_TIMEOUT) {
+        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_suppress_ms;
         data->accumulated = 0;
         data->blocked = true;
         data->skip_frame = false;
@@ -146,7 +146,7 @@ static const struct zmk_input_processor_driver_api threshold_api = {
     static const struct threshold_config config_##n = {                      \
         .threshold       = DT_INST_PROP(n, threshold),                       \
         .window_ms       = DT_INST_PROP(n, window_ms),                       \
-        .wake_discard_ms = DT_INST_PROP(n, wake_discard_ms),                 \
+        .wake_suppress_ms = DT_INST_PROP(n, wake_suppress_ms),                 \
     };                                                                       \
     static struct threshold_data data_##n = {                                \
         .accumulated = 0,                                                    \
@@ -174,15 +174,15 @@ static int on_activity_state(const zmk_event_t *eh) {
     int64_t now = k_uptime_get();
     for (size_t i = 0; i < ARRAY_SIZE(threshold_devs); i++) {
         const struct threshold_config *cfg = threshold_devs[i]->config;
-        if (!cfg->wake_discard_ms) {
+        if (!cfg->wake_suppress_ms) {
             continue;
         }
         struct threshold_data *data = threshold_devs[i]->data;
-        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_discard_ms;
+        data->wake_recovery_until_ms = now + (int64_t)cfg->wake_suppress_ms;
         data->accumulated = 0;
         data->blocked = true;
         data->skip_frame = false;
-        LOG_DBG("wake recovery armed: %ums", cfg->wake_discard_ms);
+        LOG_DBG("wake recovery armed: %ums", cfg->wake_suppress_ms);
     }
     return 0;
 }
