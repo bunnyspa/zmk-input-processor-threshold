@@ -80,7 +80,7 @@ static int threshold_handle_event(const struct device *dev,
             data->accumulated = 0;
             data->blocked = true;
             data->skip_frame = false;
-            LOG_DBG("wake recovery: discarding val=%d remaining=%lldms",
+            LOG_WRN("wake suppress: val=%d remaining=%lldms",
                     event->value, data->wake_recovery_until_ms - now);
             return ZMK_INPUT_PROC_STOP;
         }
@@ -131,7 +131,8 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_DBG("unblocked (accumulated=%u >= threshold=%u)", data->accumulated, threshold);
+        LOG_WRN("unblocked: accumulated=%u >= threshold=%u dt=%lldms val=%d",
+                data->accumulated, threshold, dt, event->value);
     }
 
     /* Block further processing until threshold is met */
