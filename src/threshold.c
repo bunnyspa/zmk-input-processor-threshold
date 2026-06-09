@@ -31,6 +31,8 @@ struct threshold_data {
     bool skip_frame;      /* true = threshold crossed mid-frame, drop rest of frame */
     int64_t last_event_ms;
     int64_t wake_recovery_until_ms;
+    uint32_t wake_suppress_count;
+    uint32_t wake_suppress_dist;
 };
 
 static int threshold_handle_event(const struct device *dev,
@@ -62,16 +64,28 @@ static int threshold_handle_event(const struct device *dev,
 
     /* Suppress motion input during the wake window to prevent spurious
      * sensor output on wake from passing through to downstream processors. */
-    if (data->wake_recovery_until_ms > 0 && now < data->wake_recovery_until_ms) {
-        if (!event->sync &&
-            event->type == INPUT_EV_REL &&
-            (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
-            data->accumulated = 0;
-            data->blocked = true;
-            data->skip_frame = false;
-            LOG_DBG("wake suppress: val=%d remaining=%lldms",
-                    event->value, data->wake_recovery_until_ms - now);
-            return ZMK_INPUT_PROC_STOP;
+    if (data->wake_recovery_until_ms > 0) {
+        if (now < data->wake_recovery_until_ms) {
+            if (!event->sync &&
+                event->type == INPUT_EV_REL &&
+                (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
+                int32_t v = event->value;
+                data->wake_suppress_count++;
+                data->wake_suppress_dist += (uint32_t)(v < 0 ? -v : v);
+                data->accumulated = 0;
+                data->blocked = true;
+                data->skip_frame = false;
+                LOG_WRN("wake suppress: val=%d dist=%u remaining=%lldms count=%u",
+                        event->value, data->wake_suppress_dist,
+                        data->wake_recovery_until_ms - now, data->wake_suppress_count);
+                return ZMK_INPUT_PROC_STOP;
+            }
+        } else if (data->wake_suppress_count > 0) {
+            LOG_WRN("wake suppress done: %u events dist=%u",
+                    data->wake_suppress_count, data->wake_suppress_dist);
+            data->wake_suppress_count = 0;
+            data->wake_suppress_dist = 0;
+            data->wake_recovery_until_ms = 0;
         }
     }
 
@@ -79,7 +93,7 @@ static int threshold_handle_event(const struct device *dev,
     if (data->accumulated == 0 && !data->blocked) {
         data->blocked = true;
         data->skip_frame = false;
-        LOG_DBG("re-blocked (accumulator drained)");
+        LOG_WRN("re-blocked (accumulator drained)");
     }
 
     /* Sync marks end-of-frame. Drop it while blocked or when threshold was crossed
@@ -120,7 +134,7 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_DBG("unblocked: accumulated=%u >= threshold=%u dt=%lldms val=%d",
+        LOG_WRN("unblocked: dist=%u threshold=%u dt=%lldms val=%d",
                 data->accumulated, threshold, dt, event->value);
     }
 
@@ -144,6 +158,8 @@ static const struct zmk_input_processor_driver_api threshold_api = {
         .skip_frame = false,                                                 \
         .last_event_ms = 0,                                                  \
         .wake_recovery_until_ms = 0,                                         \
+        .wake_suppress_count = 0,                                            \
+        .wake_suppress_dist = 0,                                             \
     };                                                                       \
     DEVICE_DT_INST_DEFINE(n, NULL, NULL, &data_##n, &config_##n,             \
                           POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,  \
@@ -169,10 +185,13 @@ static int on_activity_state(const zmk_event_t *eh) {
         }
         struct threshold_data *data = threshold_devs[i]->data;
         data->wake_recovery_until_ms = now + (int64_t)cfg->wake_suppress_ms;
+        data->wake_suppress_count = 0;
+        data->wake_suppress_dist = 0;
         data->accumulated = 0;
         data->blocked = true;
         data->skip_frame = false;
-        LOG_DBG("wake suppress armed: %ums", cfg->wake_suppress_ms);
+        LOG_WRN("wake suppress armed: %ums (idle: %lldms)",
+                cfg->wake_suppress_ms, now - data->last_event_ms);
     }
     return 0;
 }
