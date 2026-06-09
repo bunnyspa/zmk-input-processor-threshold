@@ -81,8 +81,9 @@ static int threshold_handle_event(const struct device *dev,
                 return ZMK_INPUT_PROC_STOP;
             }
         } else if (data->wake_suppress_count > 0) {
-            LOG_WRN("wake suppress done: %u events dist=%u",
-                    data->wake_suppress_count, data->wake_suppress_dist);
+            int64_t arm_ms = data->wake_recovery_until_ms - (int64_t)cfg->wake_suppress_ms;
+            LOG_WRN("wake suppress done: %u events dist=%u elapsed=%lldms",
+                    data->wake_suppress_count, data->wake_suppress_dist, now - arm_ms);
             data->wake_suppress_count = 0;
             data->wake_suppress_dist = 0;
             data->wake_recovery_until_ms = 0;
