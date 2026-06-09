@@ -110,7 +110,7 @@ The time window (in milliseconds) over which counts accumulate. Accumulated coun
 
 ```c
 &threshold {
-    wake-suppress-ms = <100>; // increase if unwanted motion persists on wake
+    wake-suppress-ms = <750>; // increase if unwanted motion persists on wake
     threshold = <100>;       // optional: fallback for param1 when 0
     window-ms = <1000>;      // optional: fallback for param2 when 0
 };
