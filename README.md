@@ -104,7 +104,14 @@ The time window (in milliseconds) over which counts accumulate. Accumulated coun
 
 ## Node properties
 
-`wake-suppress-ms` suppresses motion input for a short window on keyboard wake. Some sensors may produce spurious motion during the transition back to active mode. `0` (the default) disables the feature.
+`wake-suppress-ms` suppresses motion input for a short window on keyboard wake. `0` (the default) disables the feature.
+
+If your keyboard falsely activates a mouse layer or moves the cursor on wake without touching the trackball, add `wake-suppress-ms` to your threshold node. Some sensors produce a burst of spurious motion during the REST→RUN transition when waking from deep sleep.
+
+Two ways to tune the window:
+
+- **Increase `wake-suppress-ms`** — no sensor config needed. Use `<750>` with the sensor's default REST3 sample period (500ms).
+- **Reduce the sensor's REST3 sample period** (e.g. `CONFIG_PMW3610_ALT_REST3_SAMPLE_TIME_MS=200`) — burst arrives sooner, so a shorter window (`<400>`) is enough. Trades slightly more power in deep sleep for a more responsive wake.
 
 `threshold` and `window-ms` are fallbacks used when param1/param2 are 0.
 

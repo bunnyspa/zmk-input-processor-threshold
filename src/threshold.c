@@ -4,11 +4,8 @@
 #include <zephyr/device.h>
 #include <zephyr/input/input.h>
 #include <drivers/input_processor.h>
-#include <zephyr/logging/log.h>
 #include <zmk/events/activity_state_changed.h>
 #include <zmk/activity.h>
-
-LOG_MODULE_REGISTER(threshold, CONFIG_ZMK_LOG_LEVEL);
 
 static bool is_button(const struct input_event *event) {
     return event->type == INPUT_EV_KEY;
@@ -31,8 +28,6 @@ struct threshold_data {
     bool skip_frame;      /* true = threshold crossed mid-frame, drop rest of frame */
     int64_t last_event_ms;
     int64_t wake_recovery_until_ms;
-    uint32_t wake_suppress_count;
-    uint32_t wake_suppress_dist;
 };
 
 static int threshold_handle_event(const struct device *dev,
@@ -69,23 +64,12 @@ static int threshold_handle_event(const struct device *dev,
             if (!event->sync &&
                 event->type == INPUT_EV_REL &&
                 (event->code == INPUT_REL_X || event->code == INPUT_REL_Y)) {
-                int32_t v = event->value;
-                data->wake_suppress_count++;
-                data->wake_suppress_dist += (uint32_t)(v < 0 ? -v : v);
                 data->accumulated = 0;
                 data->blocked = true;
                 data->skip_frame = false;
-                LOG_WRN("wake suppress: val=%d dist=%u remaining=%lldms count=%u",
-                        event->value, data->wake_suppress_dist,
-                        data->wake_recovery_until_ms - now, data->wake_suppress_count);
                 return ZMK_INPUT_PROC_STOP;
             }
-        } else if (data->wake_suppress_count > 0) {
-            int64_t arm_ms = data->wake_recovery_until_ms - (int64_t)cfg->wake_suppress_ms;
-            LOG_WRN("wake suppress done: %u events dist=%u elapsed=%lldms",
-                    data->wake_suppress_count, data->wake_suppress_dist, now - arm_ms);
-            data->wake_suppress_count = 0;
-            data->wake_suppress_dist = 0;
+        } else {
             data->wake_recovery_until_ms = 0;
         }
     }
@@ -94,7 +78,6 @@ static int threshold_handle_event(const struct device *dev,
     if (data->accumulated == 0 && !data->blocked) {
         data->blocked = true;
         data->skip_frame = false;
-        LOG_WRN("re-blocked (accumulator drained)");
     }
 
     /* Sync marks end-of-frame. Drop it while blocked or when threshold was crossed
@@ -135,8 +118,6 @@ static int threshold_handle_event(const struct device *dev,
          * downstream processors see a clean full frame on the next cycle. */
         data->blocked = false;
         data->skip_frame = true;
-        LOG_WRN("unblocked: dist=%u threshold=%u dt=%lldms val=%d",
-                data->accumulated, threshold, dt, event->value);
     }
 
     /* Block further processing until threshold is met */
@@ -149,18 +130,16 @@ static const struct zmk_input_processor_driver_api threshold_api = {
 
 #define THRESHOLD_INST(n)                                                    \
     static const struct threshold_config config_##n = {                      \
-        .threshold       = DT_INST_PROP(n, threshold),                       \
-        .window_ms       = DT_INST_PROP(n, window_ms),                       \
-        .wake_suppress_ms = DT_INST_PROP(n, wake_suppress_ms),                 \
+        .threshold        = DT_INST_PROP(n, threshold),                      \
+        .window_ms        = DT_INST_PROP(n, window_ms),                      \
+        .wake_suppress_ms = DT_INST_PROP(n, wake_suppress_ms),               \
     };                                                                       \
     static struct threshold_data data_##n = {                                \
-        .accumulated = 0,                                                    \
-        .blocked = true,                                                     \
-        .skip_frame = false,                                                 \
-        .last_event_ms = 0,                                                  \
+        .accumulated            = 0,                                         \
+        .blocked                = true,                                      \
+        .skip_frame             = false,                                      \
+        .last_event_ms          = 0,                                         \
         .wake_recovery_until_ms = 0,                                         \
-        .wake_suppress_count = 0,                                            \
-        .wake_suppress_dist = 0,                                             \
     };                                                                       \
     DEVICE_DT_INST_DEFINE(n, NULL, NULL, &data_##n, &config_##n,             \
                           POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,  \
@@ -186,13 +165,9 @@ static int on_activity_state(const zmk_event_t *eh) {
         }
         struct threshold_data *data = threshold_devs[i]->data;
         data->wake_recovery_until_ms = now + (int64_t)cfg->wake_suppress_ms;
-        data->wake_suppress_count = 0;
-        data->wake_suppress_dist = 0;
         data->accumulated = 0;
         data->blocked = true;
         data->skip_frame = false;
-        LOG_WRN("wake suppress armed: %ums (idle: %lldms)",
-                cfg->wake_suppress_ms, now - data->last_event_ms);
     }
     return 0;
 }
